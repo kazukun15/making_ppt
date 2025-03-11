@@ -252,12 +252,12 @@ def research_agent(user_prompt):
     }
 
 # === 2. Content Planning Agent ===
-def content_planning_agent(user_prompt, web_results):
-    presentation_template = """
+def content_planning_agent(user_prompt, web_results, total_slide_count):
+    presentation_template = f"""
     あなたは高度なプレゼンテーション構成作成AIです。以下のルールを厳守してください：
     1. 各スライドのタイトルは20ポイント、本文（箇条書き・説明文）は18ポイント、出典情報は14ポイントとすること。
     2. 各スライドは必ず6〜8個の箇条書き項目（各60〜80文字程度）と400〜500文字の詳細な説明文、出典情報を含むこと。
-    3. 全体で約25枚程度のスライドを生成し、最後に必ず「まとめ」スライドを1枚含むこと。
+    3. 全体で約{total_slide_count}枚程度のスライドを生成し、最後に必ず「まとめ」スライドを1枚含むこと。
     4. 出力は必ず下記のJSON形式のみで返すこと：
     {{
       "slides": [
@@ -280,9 +280,9 @@ def content_planning_agent(user_prompt, web_results):
         }}
       ]
     }}
-    ユーザーのテーマ：{prompt}
+    ユーザーのテーマ：{{prompt}}
     参考Web検索結果：
-    {web_results}
+    {{web_results}}
     """
     prompt = PromptTemplate(input_variables=["prompt", "web_results"], template=presentation_template)
     chain = LLMChain(llm=llm_content, prompt=prompt)
@@ -296,18 +296,18 @@ def content_planning_agent(user_prompt, web_results):
     return slides_data
 
 # === 3. Enhancement Agent ===
-def enhancement_agent(existing_slides_data, user_prompt, web_results):
-    enhancement_prompt = """
+def enhancement_agent(existing_slides_data, user_prompt, web_results, total_slide_count):
+    enhancement_prompt = f"""
     以下のJSONデータはプレゼンテーションのスライド構成です。いくつかのスライドで本文や出典情報が不足しています。
     既存情報を保持しつつ、以下のルールに従い不足部分を補完してください：
-    1. 全体で約25枚のスライドと「まとめ」スライドを含むこと。
+    1. 全体で約{total_slide_count}枚のスライドと「まとめ」スライドを含むこと。
     2. 各スライドは6〜8個の箇条書き項目（各60〜80文字）と400〜500文字の詳細な説明文、出典情報を含むこと。
     3. 出力は余計なテキストを含まず、必ずJSON形式で返すこと。
-    ユーザーのテーマ：{prompt}
+    ユーザーのテーマ：{{prompt}}
     参考Web検索結果：
-    {web_results}
+    {{web_results}}
     既存のJSONデータ：
-    {existing_json}
+    {{existing_json}}
     """
     prompt = PromptTemplate(input_variables=["prompt", "web_results", "existing_json"], template=enhancement_prompt)
     chain = LLMChain(llm=llm_enhancement, prompt=prompt)
@@ -366,7 +366,6 @@ def design_agent(slides_data):
         for paragraph in slide.shapes.title.text_frame.paragraphs:
             paragraph.font.size = Pt(20)
             paragraph.font.name = "宮澄乃"
-        # 本文用テキストボックス（ワンシート内に収まるよう固定サイズ＆折り返し有効）
         left = Inches(0.5)
         top = Inches(1.5)
         width = Inches(9)
@@ -510,13 +509,13 @@ def visualization_agent(prs, slides_data, web_results):
     return prs
 
 # === 7. オーケストレーション（非同期処理でバックグラウンド実行、同期処理に見せかける） ===
-async def main_orchestration_async(user_prompt, save_dir, progress_bar, status_text):
+async def main_orchestration_async(user_prompt, save_dir, total_slide_count, progress_bar, status_text):
     status_text.text("Research Agent 処理中...")
     research_output = await asyncio.to_thread(research_agent, user_prompt)
     progress_bar.progress(20)
     
     status_text.text("Content Planning Agent 処理中...")
-    slides_data = await asyncio.to_thread(content_planning_agent, user_prompt, research_output["web_results"])
+    slides_data = await asyncio.to_thread(content_planning_agent, user_prompt, research_output["web_results"], total_slide_count)
     progress_bar.progress(40)
     
     status_text.text("Quality Check Agent 処理中...")
@@ -524,7 +523,7 @@ async def main_orchestration_async(user_prompt, save_dir, progress_bar, status_t
     progress_bar.progress(50)
     
     status_text.text("Enhancement Agent 処理中...")
-    slides_data = await asyncio.to_thread(enhancement_agent, slides_data, user_prompt, research_output["web_results"])
+    slides_data = await asyncio.to_thread(enhancement_agent, slides_data, user_prompt, research_output["web_results"], total_slide_count)
     progress_bar.progress(60)
     
     status_text.text("Design Agent 処理中...")
@@ -547,6 +546,9 @@ def main():
     st.set_page_config(page_title="パワーポイント作成君", layout="wide")
     st.title("パワーポイント作成君")
     st.markdown("### 高品質なプレゼンテーションを自動生成します")
+    
+    # サイドバーでスライド枚数を調整
+    total_slide_count = st.sidebar.slider("生成するスライド枚数", min_value=10, max_value=50, value=25, step=1)
     
     graphviz_code = """
     digraph {
@@ -575,7 +577,7 @@ def main():
             progress_bar = st.progress(0)
             status_text = st.empty()
             try:
-                final_save_path = asyncio.run(main_orchestration_async(user_prompt, save_dir, progress_bar, status_text))
+                final_save_path = asyncio.run(main_orchestration_async(user_prompt, save_dir, total_slide_count, progress_bar, status_text))
                 with open(final_save_path, "rb") as f:
                     ppt_data = f.read()
                 st.success("プレゼンテーション生成完了！")
