@@ -1,0 +1,9 @@
+streamlit
+google-generativeai
+python-pptx
+langchain-google-genai
+langchain-core
+langgraph
+python-dotenv
+langchain-community
+requests
