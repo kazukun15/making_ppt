@@ -1,5 +1,5 @@
 import streamlit as st
-import os, time, re, json, requests, tempfile, concurrent.futures
+import os, time, re, json, requests, tempfile, asyncio
 from datetime import datetime
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -343,7 +343,7 @@ def quality_check_agent(slides_data):
     slides_data["slides"] = slides
     return slides_data
 
-# === 5. Design Agent (PPT生成、フォントは「宮澄乃」、ワンシートに収まるようテキストの折り返し調整) ===
+# === 5. Design Agent (PPT生成、フォントは「宮澄乃」、ワンシート内に収まるようテキスト折り返し調整) ===
 def design_agent(slides_data):
     prs = Presentation()
     # タイトルスライド
@@ -373,7 +373,7 @@ def design_agent(slides_data):
         height = Inches(4)
         body_box = slide.shapes.add_textbox(left, top, width, height)
         text_frame = body_box.text_frame
-        text_frame.word_wrap = True  # 折り返し有効
+        text_frame.word_wrap = True
         bullets = slide_info.get("bullets", [])
         if bullets and bullets != ["本文なし"]:
             text_frame.text = bullets[0]
@@ -390,13 +390,11 @@ def design_agent(slides_data):
             for paragraph in text_frame.paragraphs:
                 paragraph.font.size = Pt(18)
                 paragraph.font.name = "宮澄乃"
-        # 詳細説明の追加
         if slide_info.get("description", "").strip() != "":
             p = text_frame.add_paragraph()
             p.text = slide_info["description"]
             p.font.size = Pt(18)
             p.font.name = "宮澄乃"
-        # 出典情報
         if slide_info.get("source", ""):
             add_source_textbox(slide, slide_info["source"])
     return prs
@@ -441,9 +439,7 @@ def visualization_agent(prs, slides_data, web_results):
             table_response = invoke_with_retry(chain, {"slide_content": slide_content, "web_results": filtered_web_results})
             table_json_str = extract_table_json(table_response["text"])
             table_data = json.loads(table_json_str)
-            # テーブルスライド作成
             table_slide = prs.slides.add_slide(blank_slide_layout)
-            # タイトルボックス
             left = Inches(0.5)
             top = Inches(0.5)
             width = Inches(9)
@@ -455,7 +451,6 @@ def visualization_agent(prs, slides_data, web_results):
                 paragraph.font.name = "宮澄乃"
             headers = table_data.get("headers", [])
             rows = table_data.get("rows", [])
-            # テーブル配置・サイズ（ワンシート内に収めるため調整）
             row_count = len(rows) + 1
             col_count = len(headers)
             table_left = Inches(0.5)
@@ -463,7 +458,6 @@ def visualization_agent(prs, slides_data, web_results):
             table_width = Inches(9)
             table_height = Inches(4)
             pptx_table = table_slide.shapes.add_table(row_count, col_count, table_left, table_top, table_width, table_height).table
-            # ヘッダーの設定
             for col_idx, header in enumerate(headers):
                 cell = pptx_table.cell(0, col_idx)
                 cell.text = header
@@ -473,7 +467,6 @@ def visualization_agent(prs, slides_data, web_results):
                     paragraph.font.name = "宮澄乃"
                     paragraph.alignment = PP_ALIGN.CENTER
                     cell.text_frame.word_wrap = True
-            # データ行の設定（セル内折り返し有効）
             for row_idx, row_data in enumerate(rows, start=1):
                 for col_idx, cell_text in enumerate(row_data):
                     cell = pptx_table.cell(row_idx, col_idx)
@@ -486,18 +479,15 @@ def visualization_agent(prs, slides_data, web_results):
                             paragraph.alignment = PP_ALIGN.RIGHT
                         else:
                             paragraph.alignment = PP_ALIGN.LEFT
-            # 固定の列幅（例：3列の場合、添付画像に近いイメージ）
             if col_count == 3:
                 pptx_table.columns[0].width = Inches(2.5)
                 pptx_table.columns[1].width = Inches(3.0)
                 pptx_table.columns[2].width = Inches(3.5)
-            # 出典情報
             if slide_info.get("source", ""):
                 add_source_textbox(prs.slides[-1], slide_info["source"])
         except Exception as e:
             st.warning(f"テーブル生成エラー: {e}")
             continue
-    # 出典情報スライドの追加
     if unique_references:
         slide_layout = prs.slide_layouts[1]
         ref_slide = prs.slides.add_slide(slide_layout)
@@ -519,30 +509,45 @@ def visualization_agent(prs, slides_data, web_results):
             run.font.underline = True
     return prs
 
-# === 7. オーケストレーション ===
-def main_orchestration(user_prompt, save_dir):
-    research_output = research_agent(user_prompt)
-    global unique_references
-    unique_references = research_output["references"]
-    slides_data = content_planning_agent(user_prompt, research_output["web_results"])
-    slides_data = quality_check_agent(slides_data)
-    # Enhancement処理（必要に応じて）
-    slides_data = enhancement_agent(slides_data, user_prompt, research_output["web_results"])
-    prs = design_agent(slides_data)
-    prs = visualization_agent(prs, slides_data, research_output["web_results"])
+# === 7. オーケストレーション（非同期処理でバックグラウンド実行、同期処理に見せかける） ===
+async def main_orchestration_async(user_prompt, save_dir, progress_bar, status_text):
+    status_text.text("Research Agent 処理中...")
+    research_output = await asyncio.to_thread(research_agent, user_prompt)
+    progress_bar.progress(20)
+    
+    status_text.text("Content Planning Agent 処理中...")
+    slides_data = await asyncio.to_thread(content_planning_agent, user_prompt, research_output["web_results"])
+    progress_bar.progress(40)
+    
+    status_text.text("Quality Check Agent 処理中...")
+    slides_data = await asyncio.to_thread(quality_check_agent, slides_data)
+    progress_bar.progress(50)
+    
+    status_text.text("Enhancement Agent 処理中...")
+    slides_data = await asyncio.to_thread(enhancement_agent, slides_data, user_prompt, research_output["web_results"])
+    progress_bar.progress(60)
+    
+    status_text.text("Design Agent 処理中...")
+    prs = await asyncio.to_thread(design_agent, slides_data)
+    progress_bar.progress(80)
+    
+    status_text.text("Visualization Agent 処理中...")
+    prs = await asyncio.to_thread(visualization_agent, prs, slides_data, research_output["web_results"])
+    progress_bar.progress(95)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pptx_filename = f"presentation_{timestamp}.pptx"
     save_path = os.path.join(save_dir, pptx_filename)
-    prs.save(save_path)
+    await asyncio.to_thread(prs.save, save_path)
+    progress_bar.progress(100)
+    status_text.text("完了！")
     return save_path
 
-# === Streamlit UI部分 ===
 def main():
     st.set_page_config(page_title="パワーポイント作成君", layout="wide")
     st.title("パワーポイント作成君")
     st.markdown("### 高品質なプレゼンテーションを自動生成します")
     
-    # システム構成図（Graphvizを使用）
     graphviz_code = """
     digraph {
         rankdir=LR;
@@ -562,17 +567,15 @@ def main():
         st.info("テーマや指示を入力してください。")
         return
 
-    # 一時保存ディレクトリの作成
     save_dir = os.path.join(tempfile.gettempdir(), "generated_ppts")
     os.makedirs(save_dir, exist_ok=True)
     
     if st.button("プレゼンテーション生成"):
         with st.spinner("プレゼンテーションを生成中です..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             try:
-                # 非同期処理（バックグラウンドスレッドで実行し、同期的に見せかける）
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(main_orchestration, user_prompt, save_dir)
-                    final_save_path = future.result()
+                final_save_path = asyncio.run(main_orchestration_async(user_prompt, save_dir, progress_bar, status_text))
                 with open(final_save_path, "rb") as f:
                     ppt_data = f.read()
                 st.success("プレゼンテーション生成完了！")
