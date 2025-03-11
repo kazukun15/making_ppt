@@ -343,7 +343,7 @@ def quality_check_agent(slides_data):
     slides_data["slides"] = slides
     return slides_data
 
-# === 5. Design Agent (PPT生成、フォントは「宮澄乃」、文字サイズ・テーブルサイズ調整) ===
+# === 5. Design Agent (PPT生成、フォントは「宮澄乃」、ワンシートに収まるようテキストの折り返し調整) ===
 def design_agent(slides_data):
     prs = Presentation()
     # タイトルスライド
@@ -366,16 +366,19 @@ def design_agent(slides_data):
         for paragraph in slide.shapes.title.text_frame.paragraphs:
             paragraph.font.size = Pt(20)
             paragraph.font.name = "宮澄乃"
-        # 本文用テキストボックス（1ページに収まるようサイズ調整）
+        # 本文用テキストボックス（ワンシート内に収まるよう固定サイズ＆折り返し有効）
         left = Inches(0.5)
         top = Inches(1.5)
         width = Inches(9)
         height = Inches(4)
         body_box = slide.shapes.add_textbox(left, top, width, height)
         text_frame = body_box.text_frame
+        text_frame.word_wrap = True  # 折り返し有効
         bullets = slide_info.get("bullets", [])
         if bullets and bullets != ["本文なし"]:
             text_frame.text = bullets[0]
+            text_frame.paragraphs[0].font.size = Pt(18)
+            text_frame.paragraphs[0].font.name = "宮澄乃"
             for bullet in bullets[1:]:
                 p = text_frame.add_paragraph()
                 p.text = bullet
@@ -398,7 +401,7 @@ def design_agent(slides_data):
             add_source_textbox(slide, slide_info["source"])
     return prs
 
-# === 6. Visualization Agent (テーブル生成、フォント・サイズ調整) ===
+# === 6. Visualization Agent (テーブル生成、セル内折り返し＆ワンシート内に収まるよう調整) ===
 def visualization_agent(prs, slides_data, web_results):
     table_prompt_template = """
     あなたは正確なデータ視覚化AIです。以下の情報源をもとに、1ページに収まるサイズの表を生成してください。
@@ -440,6 +443,7 @@ def visualization_agent(prs, slides_data, web_results):
             table_data = json.loads(table_json_str)
             # テーブルスライド作成
             table_slide = prs.slides.add_slide(blank_slide_layout)
+            # タイトルボックス
             left = Inches(0.5)
             top = Inches(0.5)
             width = Inches(9)
@@ -451,21 +455,30 @@ def visualization_agent(prs, slides_data, web_results):
                 paragraph.font.name = "宮澄乃"
             headers = table_data.get("headers", [])
             rows = table_data.get("rows", [])
+            # テーブル配置・サイズ（ワンシート内に収めるため調整）
             row_count = len(rows) + 1
             col_count = len(headers)
-            pptx_table = table_slide.shapes.add_table(row_count, col_count, Inches(0.5), Inches(1.5), Inches(9), Inches(4)).table
+            table_left = Inches(0.5)
+            table_top = Inches(1.5)
+            table_width = Inches(9)
+            table_height = Inches(4)
+            pptx_table = table_slide.shapes.add_table(row_count, col_count, table_left, table_top, table_width, table_height).table
+            # ヘッダーの設定
             for col_idx, header in enumerate(headers):
                 cell = pptx_table.cell(0, col_idx)
                 cell.text = header
                 for paragraph in cell.text_frame.paragraphs:
                     paragraph.font.bold = True
-                    paragraph.font.size = Pt(20)
+                    paragraph.font.size = Pt(18)
                     paragraph.font.name = "宮澄乃"
                     paragraph.alignment = PP_ALIGN.CENTER
+                    cell.text_frame.word_wrap = True
+            # データ行の設定（セル内折り返し有効）
             for row_idx, row_data in enumerate(rows, start=1):
                 for col_idx, cell_text in enumerate(row_data):
                     cell = pptx_table.cell(row_idx, col_idx)
                     cell.text = cell_text
+                    cell.text_frame.word_wrap = True
                     for paragraph in cell.text_frame.paragraphs:
                         paragraph.font.size = Pt(18)
                         paragraph.font.name = "宮澄乃"
@@ -473,6 +486,12 @@ def visualization_agent(prs, slides_data, web_results):
                             paragraph.alignment = PP_ALIGN.RIGHT
                         else:
                             paragraph.alignment = PP_ALIGN.LEFT
+            # 固定の列幅（例：3列の場合、添付画像に近いイメージ）
+            if col_count == 3:
+                pptx_table.columns[0].width = Inches(2.5)
+                pptx_table.columns[1].width = Inches(3.0)
+                pptx_table.columns[2].width = Inches(3.5)
+            # 出典情報
             if slide_info.get("source", ""):
                 add_source_textbox(prs.slides[-1], slide_info["source"])
         except Exception as e:
